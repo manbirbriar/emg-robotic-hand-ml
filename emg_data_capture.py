@@ -9,7 +9,11 @@ def get_trial_counts(filename, fs=200, duration=5):
         return {}
     try:
         df = pd.read_csv(filename, usecols=["Label"])
-        counts = (df["Label"].value_counts() // (fs * duration)).to_dict()
+        raw_counts = df["Label"].value_counts()
+        print("\n--- Raw Sample Counts ---")
+        print(raw_counts.to_string())
+        print("-------------------------")
+        counts = (raw_counts / (fs * duration)).round().astype(int).to_dict()
         return counts
     except Exception:
         return {}
@@ -17,6 +21,7 @@ def get_trial_counts(filename, fs=200, duration=5):
 def main():
     SERIAL_PORT = "/dev/cu.usbmodem11" 
     MASTER_FILE = "master_emg_data.csv"
+    RAW_MASTER_FILE = "raw_emg_data.csv"
     
     params = BrainFlowInputParams()
     params.serial_port = SERIAL_PORT
@@ -30,7 +35,8 @@ def main():
         "4": "middle",
         "5": "ring",
         "6": "pinky",
-        "7": "hand_close"
+        "7": "hand_close",
+        "8": "new thumb"
     }
 
     try:
@@ -61,31 +67,43 @@ def main():
 
             board.start_stream()
             print("\n[PHASE 1] RESTING...")
-            time.sleep(5)
+            print("3..."); time.sleep(1)
+            print("2..."); time.sleep(1)
+            print("1..."); time.sleep(1)
             
             if label == "rest":
                 print("[PHASE 2] CONTINUING REST...")
             else:
                 print("[PHASE 2] FLEX AND HOLD! <<<")
-            time.sleep(5)
+            time.sleep(6.5)
             
             board.stop_stream()
-            data = board.get_board_data(2000) #grab last 2000 from buffer. 
-            #Also resets buffer on computer. Note not actaully 2000 records sometimes so need to fix.
+            data = board.get_board_data() # get all data from buffer
             
             emg_channels = BoardShim.get_emg_channels(board_id)
             full_emg = data[emg_channels].T 
             
-            df_phase1 = pd.DataFrame(full_emg[:1000, :], columns=["Ch1", "Ch2", "Ch3", "Ch4"])
+            # Phase 1: 3 seconds of rest (600 samples at 200Hz)
+            df_phase1 = pd.DataFrame(full_emg[:600, :], columns=["Ch1", "Ch2", "Ch3", "Ch4"])
             df_phase1["Label"] = "rest"
             
-            df_phase2 = pd.DataFrame(full_emg[1000:2000, :], columns=["Ch1", "Ch2", "Ch3", "Ch4"])
+            # Phase 2: Last 5 seconds of flex (1000 samples at 200Hz)
+            df_phase2 = pd.DataFrame(full_emg[-1000:, :], columns=["Ch1", "Ch2", "Ch3", "Ch4"])
             df_phase2["Label"] = label
             
             file_exists = os.path.isfile(MASTER_FILE)
             pd.concat([df_phase1, df_phase2]).to_csv(MASTER_FILE, mode='a', index=False, header=not file_exists)
             
-            print(f"SUCCESS: Data added to {MASTER_FILE}")
+            # Save the ENTIRE continuous recording to a separate raw CSV
+            df_full = pd.DataFrame(full_emg, columns=["Ch1", "Ch2", "Ch3", "Ch4"])
+            df_full["Label"] = label
+            df_full.loc[:599, "Label"] = "rest" # First 3 seconds (600 samples) are always rest
+            
+            raw_file_exists = os.path.isfile(RAW_MASTER_FILE)
+            df_full.to_csv(RAW_MASTER_FILE, mode='a', index=False, header=not raw_file_exists)
+            
+            print(f"SUCCESS: Clean segments added to {MASTER_FILE}")
+            print(f"SUCCESS: Full raw recording added to {RAW_MASTER_FILE}")
 
     finally:
         if board.is_prepared(): board.release_session()
